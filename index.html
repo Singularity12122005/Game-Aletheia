@@ -59,7 +59,7 @@
     <!-- Control Panel -->
     <aside class="w-full md:w-64 bg-white dark:bg-gray-800 p-4 border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-lg flex flex-col">
         <h1 class="text-xl font-bold mb-2">四色定理证明</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">玩游戏探索世界近代三大数学难题之一</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">游戏式探索世界近代三大数学难题之一</p>
         
         <div id="tutorial-box" class="text-xs bg-blue-50 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 p-3 rounded-lg mb-4 min-h-[60px]">
             <!-- Tutorial messages will be injected here -->
@@ -107,7 +107,7 @@
 
     const CHARGE_UNIT = 15;
     const CHARGE_STEP = 5;
-    const SAVE_KEY = 'fourColorTheorem_save_v9_final';
+    const SAVE_KEY = 'fourColorTheorem_save_v11_final';
     const DEBUG = new URLSearchParams(window.location.search).get('debug') === 'true';
 
     function deepClone(obj, hash = new WeakMap()) {
@@ -380,12 +380,9 @@
           const activeEdges = σ.G_active.edges.filter(e => e[0] !== vId && e[1] !== vId);
           newSigma.G_active = new Graph(activeNodes, activeEdges);
           break;
-        case ACTIONS.SELECT_KEMPE_PAIR:
-          // This action is now handled in uiState, not sigma
-          break;
         case ACTIONS.FLIP_KEMPE:
           newSigma.c = {...σ.c};
-          const [k1, k2] = a.payload.pair; // Read from action payload
+          const [k1, k2] = a.payload.pair;
           for (const v of a.payload.chain) {
             newSigma.c[v] = newSigma.c[v] === k1 ? k2 : k1;
           }
@@ -421,7 +418,10 @@
 
     function _transition(state, action, engine) {
       let { layer, sigma, uiState } = state;
-
+      
+      if (action.type === ACTIONS.SELECT_KEMPE_PAIR) {
+          return { layer, sigma, uiState: {...uiState, Cpair: action.payload.pair}};
+      }
       if (action.type === ACTIONS._SET_UI_STATE) {
         return { layer, sigma, uiState: { ...uiState, ...action.payload } };
       }
@@ -471,35 +471,12 @@
 
       if (goals[layer] && goals[layer](sigma1)) {
         if (layer === 'L6') {
-            const remainingNegativeNodes = Object.keys(sigma1.q).filter(v => sigma1.q[v] < 0);
-            if (remainingNegativeNodes.length === 0) {
-                return { layer: 'Z_WIN', sigma: {}, uiState };
-            } 
-            const G_snapshot = sigma1.G;
-            const N = remainingNegativeNodes;
-            const N_star_set = new Set(N);
-            N.forEach(v => G_snapshot.neighbors(v).forEach(nb => N_star_set.add(nb)));
-            
-            const C_nodes = G_snapshot.nodes.filter(n => N_star_set.has(n.id));
-            const C_edges = G_snapshot.edges.filter(e => N_star_set.has(e[0]) && N_star_set.has(e[1]));
-            const C = new Graph(C_nodes, C_edges);
-            const B = [...N_star_set].filter(v => !N.includes(v));
-
-            const totalChargeInC = C_nodes.reduce((sum, node) => sum + sigma1.q[node.id], 0);
-            if (totalChargeInC >= 0) throw new Error(`L7 Init Error: Generated C is not negative (charge: ${totalChargeInC}).`);
-            if (B.length > 12) throw new Error(`L7 Init Error: Boundary |B|=${B.length} is too large.`);
-            if (B.length === 0 && C.nodes.length > 0) throw new Error(`L7 Init Error: C has no boundary.`);
-
-            const cB = {};
-            B.forEach((v, i) => cB[v] = COLORS[i % COLORS.length].id);
-            const cI = {};
-            N.forEach(v => cI[v] = 0);
-            const newSigma = { C, B, cB, cI };
-            return { layer: 'L7', sigma: newSigma, uiState: {...uiState, Cpair: null} };
+            return { layer: 'Z_WIN', sigma: {}, uiState };
         }
 
         const nextLayerId = nextLayer(layer);
         let newSigma;
+        let newUiState = {...uiState, Cpair: null};
 
         switch (nextLayerId) {
           case 'L2':
@@ -530,7 +507,7 @@
           default:
             throw new Error(`Invalid next layer ID: ${nextLayerId}`);
         }
-        return { layer: nextLayerId, sigma: newSigma, uiState: {...uiState, Cpair: null} };
+        return { layer: nextLayerId, sigma: newSigma, uiState: newUiState };
       }
 
       return { layer, sigma: sigma1, uiState };
@@ -735,7 +712,7 @@
     Renders.L5 = (σ, uiState) => {
         svg.selectAll('.kempe-chain-highlight').classed('kempe-chain-highlight', false);
         const { G, c, v0 } = σ;
-        const Cpair = sigma.Cpair;
+        const { Cpair } = uiState;
         svg.selectAll('*').remove();
 
         svg.append('g').selectAll('line').data(G.edges).join('line')
@@ -947,11 +924,11 @@
                 }
                 pairs.forEach(([c1, c2]) => {
                     const b = document.createElement('button');
-                    const isSelected = sigma.Cpair && sigma.Cpair[0] === c1.id && sigma.Cpair[1] === c2.id;
+                    const isSelected = uiState.Cpair && uiState.Cpair[0] === c1.id && uiState.Cpair[1] === c2.id;
                     b.setAttribute('aria-label', `选择颜色对 ${c1.id} 与 ${c2.id}`);
                     b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${isSelected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
                     b.innerHTML = `<div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
-                    b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.SELECT_KEMPE_PAIR, payload: { pair: [c1.id, c2.id] } });
+                    b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { Cpair: [c1.id, c2.id] } });
                     grid.appendChild(b);
                 });
                 actionsBox.appendChild(grid);
