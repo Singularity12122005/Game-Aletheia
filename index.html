@@ -53,13 +53,13 @@
 
     <!-- Main Canvas Area -->
     <main class="flex-1 flex items-center justify-center p-4">
-        <svg id="graphCanvas" width="100%" height="100%" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet"></svg>
+        <svg id="graphCanvas" width="100%" height="100%" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="四色定理交互画布"></svg>
     </main>
 
     <!-- Control Panel -->
     <aside class="w-full md:w-64 bg-white dark:bg-gray-800 p-4 border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-lg flex flex-col">
         <h1 class="text-xl font-bold mb-2">四色定理证明</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">游戏式探索世界近代三大数学难题之一</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">一个交互式的逻辑探索之旅</p>
         
         <div id="tutorial-box" class="text-xs bg-blue-50 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 p-3 rounded-lg mb-4 min-h-[60px]">
             <!-- Tutorial messages will be injected here -->
@@ -107,7 +107,7 @@
 
     const CHARGE_UNIT = 15;
     const CHARGE_STEP = 5;
-    const SAVE_KEY = 'fourColorTheorem_save_v8_final';
+    const SAVE_KEY = 'fourColorTheorem_save_v9_final';
     const DEBUG = new URLSearchParams(window.location.search).get('debug') === 'true';
 
     function deepClone(obj, hash = new WeakMap()) {
@@ -188,14 +188,14 @@
 
     const saveState = s => {
         try {
-            // FIX: Use a custom replacer to handle Graph objects correctly, preventing data bloat.
             const replacer = (key, value) => {
                 if (value instanceof Graph) {
                     return { _type: 'Graph', nodes: value.nodes, edges: value.edges };
                 }
                 return value;
             };
-            localStorage.setItem(SAVE_KEY, JSON.stringify(s, replacer));
+            const stateToSave = { layer: s.layer, sigma: s.sigma, uiState: s.uiState };
+            localStorage.setItem(SAVE_KEY, JSON.stringify(stateToSave, replacer));
         } catch (e) {
             console.error("Failed to save state:", e);
         }
@@ -204,7 +204,6 @@
         try {
             const raw = localStorage.getItem(SAVE_KEY);
             if (!raw) return null;
-            // The rehydration of Graph instances is now handled in the GameEngine constructor.
             return JSON.parse(raw);
         } catch {
             return null;
@@ -286,7 +285,7 @@
         } else {
           const loaded = loadState();
           if (loaded) {
-              const rehydrateGraph = (g) => g && !(g instanceof Graph) ? new Graph(g.nodes, g.edges) : g;
+              const rehydrateGraph = (g) => g && g._type === 'Graph' ? new Graph(g.nodes, g.edges) : g;
               if(loaded.sigma.G) loaded.sigma.G = rehydrateGraph(loaded.sigma.G);
               if(loaded.sigma.G_initial) loaded.sigma.G_initial = rehydrateGraph(loaded.sigma.G_initial);
               if(loaded.sigma.G_active) loaded.sigma.G_active = rehydrateGraph(loaded.sigma.G_active);
@@ -354,7 +353,7 @@
         } catch (error) {
           console.error(`Action Dispatch Failed: ${error.message}`, { action, state: this.state, error });
           if (error.fatal) {
-              this.state = this.history.pop() || this._bootstrap(); // Rollback
+              this.state = this.history.pop() || this._bootstrap();
           }
           this.subs.forEach(fn => fn(this.state, { type: '__ERROR__', payload: error.message }));
         }
@@ -382,11 +381,11 @@
           newSigma.G_active = new Graph(activeNodes, activeEdges);
           break;
         case ACTIONS.SELECT_KEMPE_PAIR:
-          newSigma.Cpair = a.payload.pair;
+          // This action is now handled in uiState, not sigma
           break;
         case ACTIONS.FLIP_KEMPE:
           newSigma.c = {...σ.c};
-          const [k1, k2] = σ.Cpair;
+          const [k1, k2] = a.payload.pair; // Read from action payload
           for (const v of a.payload.chain) {
             newSigma.c[v] = newSigma.c[v] === k1 ? k2 : k1;
           }
@@ -398,7 +397,6 @@
               }
               newSigma.c[newSigma.v0] = freeColor.id;
           }
-          delete newSigma.Cpair;
           break;
         case ACTIONS.DISCHARGE:
           if (!canDischarge(σ.G, σ.q, a.payload.u, a.payload.v)) {
@@ -433,7 +431,7 @@
         L2: () => action.type === ACTIONS.COLOR_VERTEX && action.payload.v === sigma.vStar,
         L3: () => action.type === ACTIONS.ACK_DEADLOCK,
         L4: () => action.type === ACTIONS.REMOVE_VERTEX && sigma.G_active.degree(action.payload.v) <= 4,
-        L5: () => action.type === ACTIONS.SELECT_KEMPE_PAIR || (action.type === ACTIONS.FLIP_KEMPE && sigma.Cpair),
+        L5: () => action.type === ACTIONS.FLIP_KEMPE && action.payload.pair,
         L6: () => (action.type === ACTIONS.DISCHARGE && canDischarge(sigma.G, sigma.q, action.payload.u, action.payload.v)) || action.type === ACTIONS.ASK_HINT,
         L7: () => action.type === ACTIONS.COLOR_VERTEX && sigma.cI.hasOwnProperty(action.payload.v),
         _RECEIVE_HINT: () => true
@@ -461,12 +459,9 @@
         L1: (σ) => isProperlyColored(σ.G, σ.c) && Object.values(σ.c).every(k => k !== 0),
         L2: (σ) => isProperlyColored(σ.G, σ.c) && σ.c[σ.vStar] !== 0,
         L3: () => action.type === ACTIONS.ACK_DEADLOCK,
-        L4: (σ) => σ.G_active.nodes.length > 0 && σ.G_active.nodes.every(n => σ.G_active.degree(n.id) >= 5),
+        L4: (σ) => σ.G_active.nodes.every(n => σ.G_active.degree(n.id) >= 5),
         L5: (σ) => isProperlyColored(σ.G, σ.c) && σ.c[σ.v0] !== 0,
-        L6: (σ) => {
-            const positiveNodes = Object.keys(σ.q).filter(u => σ.q[u] > 0);
-            return !positiveNodes.some(u => σ.G.neighbors(u).some(v => σ.q[v] < 0));
-        },
+        L6: (σ) => Object.values(σ.q).every(v => v >= 0),
         L7: (σ) => {
           if (Object.values(σ.cI).some(k => k === 0)) return false;
           const fullColoring = { ...σ.cB, ...σ.cI };
@@ -521,7 +516,7 @@
             break;
           case 'L5':
             const evidence = engine.cache.L3_FAIL_EVIDENCE;
-            newSigma = { G: evidence.G.clone(), c: { ...evidence.c }, v0: evidence.vStar, Cpair: null };
+            newSigma = { G: evidence.G.clone(), c: { ...evidence.c }, v0: evidence.vStar };
             break;
           case 'L6':
             const g6 = new Graph(Graphs.L6_DISCHARGE.nodes, Graphs.L6_DISCHARGE.edges);
@@ -549,6 +544,8 @@
     exports.getKempeChain = getKempeChain;
     exports.DEBUG = DEBUG;
     exports.CHARGE_UNIT = CHARGE_UNIT;
+    exports.canDischarge = canDischarge;
+    exports.CHARGE_STEP = CHARGE_STEP;
     
     })(window);
     </script>
@@ -738,7 +735,7 @@
     Renders.L5 = (σ, uiState) => {
         svg.selectAll('.kempe-chain-highlight').classed('kempe-chain-highlight', false);
         const { G, c, v0 } = σ;
-        const Cpair = uiState.Cpair; // Read from uiState
+        const Cpair = sigma.Cpair;
         svg.selectAll('*').remove();
 
         svg.append('g').selectAll('line').data(G.edges).join('line')
@@ -757,7 +754,7 @@
                 const [k1, k2] = Cpair;
                 if (c[d.id] === k1 || c[d.id] === k2) {
                     const chain = getKempeChain(G, c, d.id, k1, k2);
-                    ENGINE.dispatch({ type: window.ACTIONS.FLIP_KEMPE, payload: { chain } });
+                    ENGINE.dispatch({ type: window.ACTIONS.FLIP_KEMPE, payload: { chain, pair: Cpair } });
                 }
             })
             .on('pointerenter', (e, d) => {
@@ -906,10 +903,9 @@
         container.className = 'grid grid-cols-2 gap-2';
         window.COLORS.forEach(col => {
             const btn = document.createElement('button');
-            btn.className = 'w-full py-2 px-2 rounded-md border-2 text-left text-sm font-semibold transition-all';
+            btn.className = 'w-full py-2 px-2 rounded-md border-2 text-left text-sm font-semibold transition-all dark:text-gray-200';
             btn.setAttribute('aria-label', `选择颜色 ${col.id}`);
             btn.style.backgroundColor = col.fill;
-            btn.style.color = '#fff';
             btn.textContent = `颜色 ${col.id}`;
             btn.onclick = () => ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { currentColor: col.id } });
             if (uiState.currentColor === col.id) {
@@ -951,11 +947,10 @@
                 }
                 pairs.forEach(([c1, c2]) => {
                     const b = document.createElement('button');
-                    // FIX: Read Cpair from uiState for correct highlighting
-                    const isSelected = uiState.Cpair && uiState.Cpair[0] === c1.id && uiState.Cpair[1] === c2.id;
-                    b.setAttribute('aria-label', `选择颜色对 ${c1.id} 和 ${c2.id}`);
+                    const isSelected = sigma.Cpair && sigma.Cpair[0] === c1.id && sigma.Cpair[1] === c2.id;
+                    b.setAttribute('aria-label', `选择颜色对 ${c1.id} 与 ${c2.id}`);
                     b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${isSelected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
-                    b.innerHTML = `<div class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
+                    b.innerHTML = `<div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
                     b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.SELECT_KEMPE_PAIR, payload: { pair: [c1.id, c2.id] } });
                     grid.appendChild(b);
                 });
@@ -997,7 +992,7 @@
         }
     });
 
-    const prefersContrast = window.matchMedia('(prefers-contrast: more)').matches;
+    const prefersContrast = window.matchMedia('(prefers-contrast: more)').matches || window.matchMedia('(forced-colors: active)').matches;
     document.getElementById('patternToggle').checked = prefersContrast;
     ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { usePattern: prefersContrast } });
 
@@ -1006,8 +1001,9 @@
         if (window.DEBUG) {
             const { sigma } = state;
             if (sigma.q) {
+                const expectedTotal = (6 * sigma.G.nodes.length - 2 * sigma.G.edges.length) * window.CHARGE_UNIT;
                 const total = Object.values(sigma.q).reduce((a,b)=>a+b,0);
-                if(Math.abs(total - (12 * window.CHARGE_UNIT)) > 1e-9) console.warn('Charge sum invariant violated!', total);
+                if(Math.abs(total - expectedTotal) > 1e-9) console.warn('Charge sum invariant violated!', {total, expected: expectedTotal});
             }
         }
     });
