@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式四色定理证明</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* Custom styles for better aesthetics and accessibility */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        .control-panel button.active {
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5);
+        }
+        .toast {
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        .toast.hide {
+            opacity: 0;
+            transform: translateY(20px) translateX(-50%);
+        }
+        .node-group:hover > circle {
+            transform: scale(1.1);
+            transition: transform 0.15s ease-out;
+        }
+        .kempe-chain-highlight {
+            stroke: #f59e0b !important;
+            stroke-width: 5px !important;
+            stroke-dasharray: 8 4;
+            animation: dash 1s linear infinite;
+        }
+        @keyframes dash {
+            to { stroke-dashoffset: -24; }
+        }
+    </style>
+</head>
+<body class="flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <!-- Main Canvas Area -->
+    <main class="flex-1 flex items-center justify-center p-4">
+        <svg id="graphCanvas" width="100%" height="100%" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet"></svg>
+    </main>
+
+    <!-- Control Panel -->
+    <aside class="w-full md:w-64 bg-white dark:bg-gray-800 p-4 border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-lg flex flex-col">
+        <h1 class="text-xl font-bold mb-2">四色定理证明</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">探索世界近代三大数学难题之一之旅</p>
+        
+        <div id="tutorial-box" class="text-xs bg-blue-50 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 p-3 rounded-lg mb-4 min-h-[60px]">
+            <!-- Tutorial messages will be injected here -->
+        </div>
+
+        <div id="actions-box" class="control-panel flex-1 space-y-2">
+            <!-- Dynamic action buttons will be injected here -->
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+            <h2 class="text-sm font-semibold text-gray-600 dark:text-gray-300">选项</h2>
+            <label class="flex items-center justify-between text-sm cursor-pointer">
+                <span>瞬时转换</span>
+                <input type="checkbox" id="instantToggle" class="toggle-switch sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+            </label>
+            <label class="flex items-center justify-between text-sm cursor-pointer">
+                <span>色盲模式 (图案)</span>
+                <input type="checkbox" id="patternToggle" class="toggle-switch sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+            </label>
+        </div>
+        
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+             <button id="undoBtn" class="text-sm px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600" disabled>撤回 (Ctrl+Z)</button>
+             <button id="redoBtn" class="text-sm px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600" disabled>重做 (Ctrl+Y)</button>
+        </div>
+    </aside>
+
+    <!-- Toast Notification Area -->
+    <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-4 py-2 rounded-lg shadow-xl text-sm opacity-0 transform translate-y-5 hide"></div>
+
+    <script>
+    /***********************************************************************
+     * SCRIPT 1: ENGINE CORE                                             *
+     * Defines the game logic, state machine, and data structures.       *
+     * It is wrapped in an IIFE that exports necessary parts to `window`. *
+     ***********************************************************************/
+    'use strict';
+    (function(exports) {
+
+    /*─────────────────────────────────────────────────────*
+     |                 0. Utilities & Constants              |
+     *─────────────────────────────────────────────────────*/
+
+    const CHARGE_UNIT = 15;
+    const CHARGE_STEP = 5;
+    const SAVE_KEY = 'fourColorTheorem_save_v4';
+    const DEBUG = new URLSearchParams(window.location.search).get('debug') === 'true';
+
+    function deepClone(obj, hash = new WeakMap()) {
+        if (Object(obj) !== obj) return obj; 
+        if (hash.has(obj)) return hash.get(obj);
+
+        if (typeof obj.clone === 'function') {
+            return obj.clone();
+        }
+
+        if (obj instanceof Set) {
+            const s = new Set();
+            hash.set(obj, s);
+            obj.forEach(v => s.add(deepClone(v, hash)));
+            return s;
+        }
+        if (obj instanceof Map) {
+            const m = new Map();
+            hash.set(obj, m);
+            obj.forEach((v, k) => m.set(deepClone(k, hash), deepClone(v, hash)));
+            return m;
+        }
+        if (obj instanceof Date) return new Date(obj);
+        if (obj instanceof RegExp) return new RegExp(obj.source, obj.flags);
+
+        const result = Array.isArray(obj) ? [] : {};
+        hash.set(obj, result);
+
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                result[key] = deepClone(obj[key], hash);
+            }
+        }
+        return result;
+    }
+
+    class Graph {
+        constructor(nodes, edges) {
+            this.nodes = nodes.map(n => ({...n}));
+            this.edges = edges.map(e => [...e]);
+            this.adj = new Map();
+            this.nodes.forEach(n => this.adj.set(n.id, new Set()));
+            edges.forEach(([u, v]) => {
+                if (this.adj.has(u) && this.adj.has(v)) {
+                    this.adj.get(u).add(v);
+                    this.adj.get(v).add(u);
+                }
+            });
+        }
+        degree(id) { return this.adj.get(id)?.size ?? 0; }
+        neighbors(id) { return [...(this.adj.get(id) || [])]; }
+        getNode(id) { return this.nodes.find(n => n.id === id); }
+        clone() { return new Graph(this.nodes, this.edges); }
+    }
+
+    const getKempeChain = (G, c, startNodeId, k1, k2) => {
+        const chain = [];
+        const queue = [startNodeId];
+        const visited = new Set([startNodeId]);
+        while (queue.length > 0) {
+            const u = queue.shift();
+            chain.push(u);
+            for (const v of G.neighbors(u)) {
+                if (!visited.has(v) && (c[v] === k1 || c[v] === k2)) {
+                    visited.add(v);
+                    queue.push(v);
+                }
+            }
+        }
+        return chain;
+    };
+
+    const canDischarge = (G, q, u, v, dq = CHARGE_STEP) => {
+        return G.neighbors(u).includes(v) && q[u] >= dq;
+    };
+
+    const saveState = s => {
+        try {
+            localStorage.setItem(SAVE_KEY, JSON.stringify(s));
+        } catch (e) {
+            console.error("Failed to save state:", e);
+        }
+    };
+    const loadState = () => {
+        try {
+            return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+        } catch {
+            return null;
+        }
+    };
+    const clearState = () => localStorage.removeItem(SAVE_KEY);
+
+    /*─────────────────────────────────────────────────────*
+     |                  1.  Static Data                    |
+     *─────────────────────────────────────────────────────*/
+
+    const COLORS = [
+      { id: 1, fill: '#e74c3c', pattern: 'url(#pat-stripes)' },
+      { id: 2, fill: '#3498db', pattern: 'url(#pat-dots)' },
+      { id: 3, fill: '#2ecc71', pattern: 'url(#pat-cross)' },
+      { id: 4, fill: '#f1c40f', pattern: 'url(#pat-grid)' }
+    ];
+    const COLOR_ZERO = '#bdc3c7';
+
+    const Graphs = {
+        L1: {
+            nodes: [{ id: 'v1', x: 250, y: 150 }, { id: 'v2', x: 450, y: 150 }, { id: 'v3', x: 250, y: 350 }, { id: 'v4', x: 450, y: 350 }],
+            edges: [['v1', 'v2'], ['v1', 'v3'], ['v2', 'v4'], ['v3', 'v4'], ['v1', 'v4']]
+        },
+        L2_GROWTH: {
+            nodes: [{ id: 'a', x: 200, y: 250 }, { id: 'b', x: 350, y: 150 }, { id: 'c', x: 350, y: 350 }, { id: 'd', x: 550, y: 250 }],
+            edges: [['a', 'b'], ['b', 'c'], ['c', 'a'], ['b', 'd'], ['c', 'd']],
+            vStar: 'd', preset: { a: 1, b: 2, c: 3, d: 0 }
+        },
+        L3_DEADLOCK: {
+            nodes: [{ id: 'p', x: 250, y: 150 }, { id: 'q', x: 450, y: 150 }, { id: 'r', x: 450, y: 350 }, { id: 's', x: 250, y: 350 }, { id: 'x', x: 350, y: 250 }],
+            edges: [['p', 'x'], ['q', 'x'], ['r', 'x'], ['s', 'x']],
+            vStar: 'x', preset: { p: 1, q: 2, r: 3, s: 4, x: 0 }
+        },
+        L4_COMPLEX: {
+            nodes: [
+                {id:'a',x:400,y:300},{id:'b',x:330,y:210},{id:'c',x:470,y:210},{id:'d',x:470,y:390},{id:'e',x:330,y:390},
+                {id:'f',x:260,y:150},{id:'g',x:400,y:150},{id:'h',x:540,y:150},{id:'i',x:540,y:300},{id:'j',x:540,y:450},
+                {id:'k',x:400,y:450},{id:'l',x:260,y:450},{id:'m',x:260,y:300},{id:'n',x:400,y:80},{id:'o',x:610,y:230},
+                {id:'p',x:610,y:370},{id:'q',x:400,y:520},{id:'r',x:190,y:370},{id:'s',x:190,y:230}
+            ],
+            edges: [
+                ['a','b'],['a','c'],['a','d'],['a','e'],['b','c'],['c','d'],['d','e'],['e','b'],
+                ['b','f'],['b','g'],['c','g'],['c','h'],['c','i'],['d','i'],['d','j'],['d','k'],
+                ['e','k'],['e','l'],['e','m'],['b','m'],['f','g'],['g','h'],['h','i'],['i','j'],
+                ['j','k'],['k','l'],['l','m'],['m','f'],['f','s'],['g','n'],['h','o'],['j','p'],
+                ['k','q'],['l','r'],['m','s'],['n','f'],['n','h'],['o','h'],['o','j'],['p','j'],
+                ['p','l'],['q','l'],['q','e'],['r','l'],['r','m'],['s','m'],['s','f']
+            ]
+        }
+    };
+    Graphs.L6_DISCHARGE = Graphs.L4_COMPLEX;
+
+    /*─────────────────────────────────────────────────────*
+     |                     2.  Engine                      |
+     *─────────────────────────────────────────────────────*/
+
+    const ACTIONS = {
+      COLOR_VERTEX: 'COLOR_VERTEX',
+      ACK_DEADLOCK: 'ACK_DEADLOCK',
+      REMOVE_VERTEX: 'REMOVE_VERTEX',
+      SELECT_KEMPE_PAIR: 'SELECT_KEMPE_PAIR',
+      FLIP_KEMPE: 'FLIP_KEMPE',
+      DISCHARGE: 'DISCHARGE',
+      ASK_HINT: 'ASK_HINT',
+      _SET_UI_STATE: '_SET_UI_STATE',
+      _RECEIVE_HINT: '_RECEIVE_HINT'
+    };
+
+    class GameEngine {
+      constructor(initialState = null) {
+        this.subs = [];
+        this.history = [];
+        this.redoStack = [];
+        this.cache = {};
+
+        if (initialState) {
+          this.state = initialState;
+        } else {
+          const loaded = loadState();
+          if (loaded) {
+              const rehydrateGraph = (g) => g && !(g instanceof Graph) ? new Graph(g.nodes, g.edges) : g;
+              if(loaded.sigma.G) loaded.sigma.G = rehydrateGraph(loaded.sigma.G);
+              if(loaded.sigma.G_initial) loaded.sigma.G_initial = rehydrateGraph(loaded.sigma.G_initial);
+              if(loaded.sigma.G_active) loaded.sigma.G_active = rehydrateGraph(loaded.sigma.G_active);
+              if(loaded.sigma.C) loaded.sigma.C = rehydrateGraph(loaded.sigma.C);
+              this.state = loaded;
+          } else {
+              this.state = this._bootstrap();
+          }
+        }
+
+        if (DEBUG) {
+          window.__GAME_ENGINE__ = this;
+          console.log('%cDebug Mode ON – __GAME_ENGINE__ available.', 'color:#e67e22; font-weight:bold;');
+        }
+      }
+
+      _bootstrap() {
+        const g = new Graph(Graphs.L1.nodes, Graphs.L1.edges);
+        const c = {};
+        g.nodes.forEach(n => c[n.id] = 0);
+        return {
+          layer: 'L1',
+          sigma: { G: g, c: c },
+          uiState: { currentColor: 1, usePattern: false, instant: false }
+        };
+      }
+
+      subscribe(fn) { this.subs.push(fn); }
+      _notify(action) {
+        this.subs.forEach(fn => fn(this.state, action));
+      }
+
+      getState() { return deepClone(this.state); }
+
+      undo() {
+        if (this.history.length === 0) return;
+        this.redoStack.push(deepClone(this.state));
+        this.state = this.history.pop();
+        this._notify({ type: '__UNDO__' });
+        saveState(this.state);
+      }
+
+      redo() {
+        if (this.redoStack.length === 0) return;
+        this.history.push(deepClone(this.state));
+        this.state = this.redoStack.pop();
+        this._notify({ type: '__REDO__' });
+        saveState(this.state);
+      }
+
+      dispatch(action) {
+        try {
+          const prevState = this.state;
+          const nextState = _transition(prevState, action, this);
+
+          if (nextState !== prevState) {
+            this.history.push(deepClone(prevState));
+            this.redoStack.length = 0;
+            this.state = nextState;
+          }
+
+          this._notify(action);
+          saveState(this.state);
+        } catch (error) {
+          console.error(`Action Dispatch Failed: ${error.message}`, { action, state: this.state });
+          this.subs.forEach(fn => fn(this.state, { type: '__ERROR__', payload: error.message }));
+        }
+      }
+    }
+
+    function _microStep(l, σ, a, engine) {
+      const newSigma = deepClone(σ);
+      switch (a.type) {
+        case ACTIONS.COLOR_VERTEX:
+          // In L7, this action has a different target object
+          if (l === 'L7') {
+              newSigma.cI[a.payload.v] = a.payload.k;
+          } else {
+              newSigma.c[a.payload.v] = a.payload.k;
+          }
+          break;
+        case ACTIONS.ACK_DEADLOCK:
+          engine.cache.L3_FAIL_EVIDENCE = deepClone(σ);
+          break;
+        case ACTIONS.REMOVE_VERTEX:
+          const vId = a.payload.v;
+          newSigma.V_reduced.push(vId);
+          const activeNodes = newSigma.G_active.nodes.filter(n => n.id !== vId);
+          const activeEdges = newSigma.G_active.edges.filter(e => e[0] !== vId && e[1] !== vId);
+          newSigma.G_active = new Graph(activeNodes, activeEdges);
+          break;
+        case ACTIONS.SELECT_KEMPE_PAIR:
+          newSigma.Cpair = a.payload.pair;
+          break;
+        case ACTIONS.FLIP_KEMPE:
+          const [k1, k2] = σ.Cpair;
+          for (const v of a.payload.chain) {
+            newSigma.c[v] = newSigma.c[v] === k1 ? k2 : k1;
+          }
+          newSigma.Cpair = null;
+          break;
+        case ACTIONS.DISCHARGE:
+          if (canDischarge(σ.G, σ.q, a.payload.u, a.payload.v, a.payload.Δq)) {
+            newSigma.q[a.payload.u] -= a.payload.Δq;
+            newSigma.q[a.payload.v] += a.payload.Δq;
+          }
+          break;
+        case ACTIONS.ASK_HINT:
+          newSigma.hintRequest = (newSigma.hintRequest || 0) + 1;
+          break;
+        case ACTIONS._RECEIVE_HINT:
+          newSigma.hint = a.payload.hint;
+          break;
+      }
+      return newSigma;
+    }
+
+    function _transition(state, action, engine) {
+      let { layer, sigma, uiState } = state;
+
+      if (action.type === ACTIONS._SET_UI_STATE) {
+        return { layer, sigma, uiState: { ...uiState, ...action.payload } };
+      }
+
+      const validators = {
+        L1: () => action.type === ACTIONS.COLOR_VERTEX,
+        L2: () => action.type === ACTIONS.COLOR_VERTEX && action.payload.v === sigma.vStar,
+        L3: () => action.type === ACTIONS.ACK_DEADLOCK,
+        L4: () => action.type === ACTIONS.REMOVE_VERTEX && sigma.G_active.degree(action.payload.v) <= 4,
+        L5: () => action.type === ACTIONS.SELECT_KEMPE_PAIR || (action.type === ACTIONS.FLIP_KEMPE && sigma.Cpair),
+        L6: () => action.type === ACTIONS.DISCHARGE || action.type === ACTIONS.ASK_HINT,
+        L7: () => action.type === ACTIONS.COLOR_VERTEX && sigma.cI.hasOwnProperty(action.payload.v),
+        _RECEIVE_HINT: () => true
+      };
+      if (!validators[layer] || !validators[layer]()) {
+        throw new Error(`Invalid action '${action.type}' for layer '${layer}'.`);
+      }
+
+      const sigma1 = _microStep(layer, sigma, action, engine);
+      
+      const nextLayer = l => {
+        const order = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'Z_WIN'];
+        return order[order.indexOf(l) + 1] || null;
+      };
+
+      const isProperlyColored = (G, c) => {
+        if (!G || !G.edges) return true;
+        for (const [u, v] of G.edges) {
+          if (c[u] !== 0 && c[u] === c[v]) return false;
+        }
+        return true;
+      };
+
+      const goals = {
+        L1: (σ) => isProperlyColored(σ.G, σ.c) && Object.values(σ.c).every(k => k !== 0),
+        L2: (σ) => isProperlyColored(σ.G, σ.c) && σ.c[σ.vStar] !== 0,
+        L3: () => action.type === ACTIONS.ACK_DEADLOCK,
+        L4: (σ) => σ.G_active.nodes.every(n => σ.G_active.degree(n.id) >= 5),
+        L5: (σ) => {
+          const neighborColors = new Set(σ.G.neighbors(σ.v0).map(id => σ.c[id]));
+          return COLORS.some(c => !neighborColors.has(c.id));
+        },
+        L6: (σ) => Object.values(σ.q).every(v => v >= 0),
+        L7: (σ) => {
+          if (Object.values(σ.cI).some(k => k === 0)) return false;
+          const fullColoring = { ...σ.cB, ...σ.cI };
+          return isProperlyColored(σ.C, fullColoring);
+        }
+      };
+
+      if (goals[layer] && goals[layer](sigma1)) {
+        const nextLayerId = nextLayer(layer);
+        let newSigma;
+
+        switch (nextLayerId) {
+          case 'L2':
+            const g2 = new Graph(Graphs.L2_GROWTH.nodes, Graphs.L2_GROWTH.edges);
+            newSigma = { G: g2, c: deepClone(Graphs.L2_GROWTH.preset), vStar: Graphs.L2_GROWTH.vStar };
+            break;
+          case 'L3':
+            const g3 = new Graph(Graphs.L3_DEADLOCK.nodes, Graphs.L3_DEADLOCK.edges);
+            newSigma = { G: g3, c: deepClone(Graphs.L3_DEADLOCK.preset), vStar: Graphs.L3_DEADLOCK.vStar };
+            break;
+          case 'L4':
+            const g4 = new Graph(Graphs.L4_COMPLEX.nodes, Graphs.L4_COMPLEX.edges);
+            newSigma = { G_initial: g4, G_active: g4.clone(), V_reduced: [] };
+            break;
+          case 'L5':
+            const evidence = engine.cache.L3_FAIL_EVIDENCE;
+            newSigma = { G: evidence.G.clone(), c: deepClone(evidence.c), v0: evidence.vStar, Cpair: null };
+            break;
+          case 'L6':
+            const g6 = new Graph(Graphs.L6_DISCHARGE.nodes, Graphs.L6_DISCHARGE.edges);
+            const q = {};
+            g6.nodes.forEach(n => q[n.id] = (6 - g6.degree(n.id)) * CHARGE_UNIT);
+            newSigma = { G: g6, q: q, R: { Δq: CHARGE_STEP } };
+            break;
+          case 'L7':
+            const mostNegativeNode = Object.entries(sigma1.q).filter(([, charge]) => charge < 0).sort((a, b) => a[1] - b[1])[0]?.[0];
+            if (!mostNegativeNode) throw new Error("L6 goal met but no negative node found.");
+            
+            const q_snapshot = sigma1.q;
+            const G_snapshot = sigma1.G;
+            let C_nodes_ids = new Set();
+            let charge_sum = 0;
+            const queue = [mostNegativeNode];
+            const visited = new Set([mostNegativeNode]);
+            
+            while (queue.length > 0) {
+              const u = queue.shift();
+              C_nodes_ids.add(u);
+              charge_sum += q_snapshot[u];
+              if (charge_sum < 0) break;
+              for (const v of G_snapshot.neighbors(u)) {
+                if (!visited.has(v)) {
+                  visited.add(v);
+                  queue.push(v);
+                }
+              }
+            }
+
+            const C_nodes = G_snapshot.nodes.filter(n => C_nodes_ids.has(n.id));
+            const C_edges = G_snapshot.edges.filter(e => C_nodes_ids.has(e[0]) && C_nodes_ids.has(e[1]));
+            const C = new Graph(C_nodes, C_edges);
+            
+            const B = C_nodes.filter(n => G_snapshot.degree(n.id) !== C.degree(n.id)).map(n => n.id);
+            const cB = {};
+            B.forEach((v, i) => cB[v] = COLORS[i % COLORS.length].id);
+            const cI = {};
+            C_nodes.forEach(n => { if (!cB[n.id]) cI[n.id] = 0; });
+            newSigma = { C, B, cB, cI, solution: null };
+            break;
+          case 'Z_WIN':
+            newSigma = {};
+            break;
+          default:
+            throw new Error(`Invalid next layer ID: ${nextLayerId}`);
+        }
+        return { layer: nextLayerId, sigma: newSigma, uiState };
+      }
+
+      return { layer, sigma: sigma1, uiState };
+    }
+    
+    exports.GameEngine = GameEngine;
+    exports.ACTIONS = ACTIONS;
+    exports.clearState = clearState;
+    exports.COLORS = COLORS;
+    exports.COLOR_ZERO = COLOR_ZERO;
+    
+    })(window);
+    </script>
+    <script>
+    /***********************************************************************
+     * SCRIPT 2: RENDERER & UI                                           *
+     * Consumes the globally exposed engine parts and handles all DOM      *
+     * manipulation, rendering, and user input events.                   *
+     ***********************************************************************/
+    'use strict';
+    (function() {
+    
+    /*─────────────────────────────────────────────────────*
+     |                  3. Renderer                      |
+     *─────────────────────────────────────────────────────*/
+
+    const svg = d3.select('#graphCanvas');
+    const Renders = {};
+
+    const ANIM_DURATION = 250;
+    const LAYER_TRANSITION_DURATION = 400;
+
+    (() => {
+        if (svg.select('defs').size()) return;
+        const defs = svg.append('defs');
+        const addPattern = (id, pathD, strokeWidth = 1) => {
+            const p = defs.append('pattern').attr('id', id).attr('patternUnits', 'userSpaceOnUse').attr('width', 8).attr('height', 8);
+            p.append('rect').attr('width', 8).attr('height', 8).attr('fill', 'rgba(255,255,255,0.9)');
+            p.append('path').attr('d', pathD).attr('stroke', '#333').attr('stroke-width', strokeWidth).attr('stroke-linecap', 'square');
+        };
+        addPattern('pat-stripes', 'M-2,2 L2,-2 M0,8 L8,0 M6,10 L10,6');
+        addPattern('pat-dots', 'M2,2 H2 V2 M6,6 H6 V6', 2);
+        addPattern('pat-cross', 'M0,0L8,8 M8,0L0,8');
+        addPattern('pat-grid', 'M4,0 V8 M0,4 H8');
+    })();
+    
+    const getFill = (k, uiState) => {
+        if (k === 0) return window.COLOR_ZERO;
+        const colorDef = window.COLORS.find(c => c.id === k);
+        return uiState.usePattern ? colorDef.pattern : colorDef.fill;
+    };
+
+    function render(state, action) {
+        if (!state) return;
+        
+        try {
+            const { layer, sigma, uiState } = state;
+            const renderFunc = Renders[layer] || Renders.Z_WIN;
+            
+            // FIX: Handle initial render (action is undefined) separately to prevent transition bugs.
+            if (!action) {
+                renderFunc(sigma, uiState);
+                svg.style('opacity', 1);
+                updateTutorial(layer);
+                updateUndoRedoButtons();
+                return;
+            }
+
+            const isLayerTransition = (ENGINE.history.length > 0 && ENGINE.history[ENGINE.history.length-1].layer !== layer);
+
+            if (isLayerTransition) {
+                const t = d3.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION);
+                svg.transition(t).style('opacity', 0).on('end', () => {
+                    if (ENGINE.getState().layer === layer) {
+                        renderFunc(sigma, uiState);
+                        // Create a NEW transition for the fade-in
+                        svg.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION).style('opacity', 1);
+                    }
+                });
+            } else {
+                renderFunc(sigma, uiState);
+            }
+            
+            updateTutorial(layer);
+            updateUndoRedoButtons();
+            if (action && action.type === '__ERROR__') {
+                pushToast(action.payload, 'error');
+            }
+        } catch (error) {
+            console.error("An error occurred during rendering:", error);
+            pushToast("渲染时发生错误，请检查控制台。", 'error');
+        }
+    }
+    
+    Renders.L1 = (σ, uiState) => {
+        const { G, c } = σ;
+        
+        svg.selectAll('*').remove();
+        
+        svg.append('g').selectAll('line').data(G.edges).join('line')
+            .attr('x1', d => G.getNode(d[0]).x).attr('y1', d => G.getNode(d[0]).y)
+            .attr('x2', d => G.getNode(d[1]).x).attr('y2', d => G.getNode(d[1]).y)
+            .attr('stroke', '#9ca3af').attr('stroke-width', 3);
+
+        const nodeGroups = svg.append('g').selectAll('g').data(G.nodes, d => d.id).join(
+            enter => {
+                const g = enter.append('g').attr('class', 'node-group').style('opacity', 0);
+                g.append('circle').attr('r', 24).attr('stroke', '#374151').attr('stroke-width', 2);
+                g.append('text').attr('text-anchor', 'middle').attr('dy', '.35em').attr('fill', '#1f2937').text(d => d.id);
+                g.transition().duration(uiState.instant ? 0 : ANIM_DURATION).style('opacity', 1);
+                return g;
+            }
+        );
+        
+        nodeGroups
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('cursor', 'pointer')
+            .on('click', (e, d) => ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } }));
+        
+        nodeGroups.select('circle')
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .attr('fill', d => getFill(c[d.id], uiState));
+            
+        drawActions('L1', σ, uiState);
+    };
+    
+    const createGrowthRenderer = (isDeadlock) => (σ, uiState) => {
+        const { G, c, vStar } = σ;
+        svg.selectAll('*').remove();
+
+        svg.append('g').selectAll('line').data(G.edges).join('line')
+            .attr('x1', d => G.getNode(d[0]).x).attr('y1', d => G.getNode(d[0]).y)
+            .attr('x2', d => G.getNode(d[1]).x).attr('y2', d => G.getNode(d[1]).y)
+            .attr('stroke', '#9ca3af').attr('stroke-width', 3);
+
+        const nodeGroups = svg.append('g').selectAll('g').data(G.nodes, d => d.id).join('g')
+            .attr('class', 'node-group')
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('cursor', d => d.id === vStar && !isDeadlock ? 'pointer' : 'default')
+            .on('click', (e, d) => {
+                if (d.id === vStar && !isDeadlock) {
+                    ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } });
+                }
+            });
+
+        nodeGroups.append('circle').attr('r', 24)
+            .attr('stroke', d => d.id === vStar ? '#0ea5e9' : '#374151')
+            .attr('stroke-width', d => d.id === vStar ? 4 : 2)
+            .attr('stroke-dasharray', d => d.id === vStar ? '6 3' : null)
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .attr('fill', d => getFill(c[d.id], uiState));
+            
+        nodeGroups.append('text').attr('text-anchor', 'middle').attr('dy', '.35em').attr('fill', '#1f2937').text(d => d.id);
+        
+        drawActions(isDeadlock ? 'L3' : 'L2', σ, uiState);
+    };
+    Renders.L2 = createGrowthRenderer(false);
+    Renders.L3 = createGrowthRenderer(true);
+
+    Renders.L4 = (σ, uiState) => {
+        const { G_initial, G_active, V_reduced } = σ;
+        svg.selectAll('*').remove();
+        
+        svg.append('g').selectAll('line').data(G_initial.edges).join('line')
+            .attr('x1', d => G_initial.getNode(d[0]).x).attr('y1', d => G_initial.getNode(d[0]).y)
+            .attr('x2', d => G_initial.getNode(d[1]).x).attr('y2', d => G_initial.getNode(d[1]).y)
+            .attr('stroke', '#e5e7eb').attr('stroke-width', 2);
+        
+        svg.append('g').selectAll('line').data(G_active.edges).join('line')
+            .attr('x1', d => G_active.getNode(d[0]).x).attr('y1', d => G_active.getNode(d[0]).y)
+            .attr('x2', d => G_active.getNode(d[1]).x).attr('y2', d => G_active.getNode(d[1]).y)
+            .attr('stroke', '#9ca3af').attr('stroke-width', 3);
+
+        const nodeGroups = svg.append('g').selectAll('g').data(G_initial.nodes, d => d.id).join('g')
+            .attr('class', 'node-group')
+            .attr('transform', d => `translate(${d.x},${d.y})`);
+        
+        nodeGroups
+            .on('click', (e, d) => {
+                if (G_active.getNode(d.id) && G_active.degree(d.id) <= 4) {
+                    ENGINE.dispatch({ type: window.ACTIONS.REMOVE_VERTEX, payload: { v: d.id } });
+                }
+            })
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .style('opacity', d => V_reduced.includes(d.id) ? 0.2 : 1)
+            .style('cursor', d => G_active.getNode(d.id) && G_active.degree(d.id) <= 4 ? 'pointer' : 'default');
+
+        nodeGroups.append('circle').attr('r', 22)
+            .attr('fill', '#ffffff')
+            .attr('stroke', d => G_active.getNode(d.id) && G_active.degree(d.id) <= 4 ? '#0ea5e9' : '#374151')
+            .attr('stroke-width', d => G_active.getNode(d.id) && G_active.degree(d.id) <= 4 ? 3 : 1.5);
+            
+        nodeGroups.append('text').attr('text-anchor', 'middle').attr('dy', '.35em').attr('fill', '#1f2937').text(d => G_active.getNode(d.id) ? G_active.degree(d.id) : '');
+
+        drawActions('L4', σ, uiState);
+    };
+    
+    Renders.L5 = (σ, uiState) => {
+        const { G, c, v0, Cpair } = σ;
+        svg.selectAll('*').remove();
+
+        svg.append('g').selectAll('line').data(G.edges).join('line')
+            .attr('x1', d => G.getNode(d[0]).x).attr('y1', d => G.getNode(d[0]).y)
+            .attr('x2', d => G.getNode(d[1]).x).attr('y2', d => G.getNode(d[1]).y)
+            .attr('stroke', '#9ca3af').attr('stroke-width', 3);
+
+        const nodeGroups = svg.append('g').selectAll('g').data(G.nodes, d => d.id).join('g')
+            .attr('class', 'node-group')
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('cursor', 'pointer')
+            .on('click', (e, d) => {
+                if (!Cpair) return;
+                const [k1, k2] = Cpair;
+                if (c[d.id] === k1 || c[d.id] === k2) {
+                    const chain = getKempeChain(G, c, d.id, k1, k2);
+                    ENGINE.dispatch({ type: window.ACTIONS.FLIP_KEMPE, payload: { chain } });
+                }
+            })
+            .on('mouseover', (e, d) => {
+                if (!Cpair) return;
+                const [k1, k2] = Cpair;
+                if (c[d.id] === k1 || c[d.id] === k2) {
+                    const chain = getKempeChain(G, c, d.id, k1, k2);
+                    const chainSet = new Set(chain);
+                    nodeGroups.selectAll('circle').classed('kempe-chain-highlight', n => chainSet.has(n.id));
+                }
+            })
+            .on('mouseout', () => {
+                nodeGroups.selectAll('circle').classed('kempe-chain-highlight', false);
+            });
+
+        nodeGroups.append('circle').attr('r', 22)
+            .attr('stroke', d => d.id === v0 ? '#0ea5e9' : '#374151')
+            .attr('stroke-width', d => d.id === v0 ? 4 : 2)
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .attr('fill', d => getFill(c[d.id], uiState));
+            
+        nodeGroups.append('text').attr('text-anchor', 'middle').attr('dy', '.35em').attr('fill', '#1f2937').text(d => d.id);
+        
+        drawActions('L5', σ, uiState);
+    };
+
+    Renders.L6 = (σ, uiState) => {
+        const { G, q } = σ;
+        svg.selectAll('*').remove();
+
+        svg.append('g').selectAll('line').data(G.edges).join('line')
+            .attr('x1', d => G.getNode(d[0]).x).attr('y1', d => G.getNode(d[0]).y)
+            .attr('x2', d => G.getNode(d[1]).x).attr('y2', d => G.getNode(d[1]).y)
+            .attr('stroke', '#d1d5db').attr('stroke-width', 2);
+
+        let selectedNode = null;
+
+        const nodeGroups = svg.append('g').selectAll('g').data(G.nodes, d => d.id).join('g')
+            .attr('class', 'node-group')
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('cursor', 'pointer')
+            .on('click', (e, d) => {
+                const circle = d3.select(e.currentTarget).select('circle');
+                if (!selectedNode) {
+                    if (q[d.id] > 0) {
+                        selectedNode = d.id;
+                        circle.attr('stroke', '#f59e0b').attr('stroke-width', 4);
+                    }
+                } else {
+                    if (selectedNode !== d.id && canDischarge(G, q, selectedNode, d.id)) {
+                        ENGINE.dispatch({ type: window.ACTIONS.DISCHARGE, payload: { u: selectedNode, v: d.id, Δq: CHARGE_STEP } });
+                    }
+                    // Deselect regardless of success
+                    svg.select(`circle[data-id="${selectedNode}"]`).attr('stroke', '#374151').attr('stroke-width', 2);
+                    selectedNode = null;
+                }
+            });
+
+        nodeGroups.append('circle').attr('r', 22).attr('data-id', d => d.id)
+            .attr('stroke', '#374151').attr('stroke-width', 2)
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .attr('fill', d => q[d.id] < 0 ? '#fee2e2' : '#effaf5');
+            
+        nodeGroups.append('text').attr('text-anchor', 'middle').attr('dy', '.35em')
+            .attr('font-size', '12px').attr('font-weight', 'bold')
+            .attr('fill', d => q[d.id] < 0 ? '#ef4444' : (q[d.id] > 0 ? '#10b981' : '#6b7280'))
+            .text(d => (q[d.id] / CHARGE_UNIT).toFixed(2));
+
+        drawActions('L6', σ, uiState);
+    };
+
+    Renders.L7 = (σ, uiState) => {
+        const { C, B, cB, cI } = σ;
+        svg.selectAll('*').remove();
+        
+        svg.append('g').selectAll('line').data(C.edges).join('line')
+            .attr('x1', d => C.getNode(d[0]).x).attr('y1', d => C.getNode(d[0]).y)
+            .attr('x2', d => C.getNode(d[1]).x).attr('y2', d => C.getNode(d[1]).y)
+            .attr('stroke', '#9ca3af').attr('stroke-width', 3);
+
+        const nodeGroups = svg.append('g').selectAll('g').data(C.nodes, d => d.id).join('g')
+            .attr('class', 'node-group')
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .style('cursor', d => B.includes(d.id) ? 'not-allowed' : 'pointer')
+            .on('click', (e, d) => {
+                if (!B.includes(d.id)) {
+                    ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } });
+                }
+            });
+
+        nodeGroups.append('circle').attr('r', 24)
+            .attr('stroke', d => B.includes(d.id) ? '#0ea5e9' : '#374151')
+            .attr('stroke-width', d => B.includes(d.id) ? 4 : 2)
+            .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
+            .attr('fill', d => getFill(cB[d.id] || cI[d.id], uiState));
+            
+        nodeGroups.append('text').attr('text-anchor', 'middle').attr('dy', '.35em').attr('fill', '#1f2937').text(d => d.id);
+        
+        drawActions('L7', σ, uiState);
+    };
+
+    Renders.Z_WIN = () => {
+        svg.selectAll('*').remove();
+        const text = svg.append('text').attr('x', '50%').attr('y', '50%').attr('text-anchor', 'middle').attr('dominant-baseline', 'middle');
+        text.append('tspan').attr('x', '50%').attr('dy', '-0.5em').attr('font-size', '48px').attr('fill', '#10b981').text('🎉');
+        text.append('tspan').attr('x', '50%').attr('dy', '1.2em').attr('font-size', '24px').attr('font-weight', 'bold').text('证明完成');
+        text.append('tspan').attr('x', '50%').attr('dy', '1.5em').attr('font-size', '16px').attr('fill', '#6b7280').text('您已掌握四色定理证明的核心逻辑。');
+        drawActions('Z_WIN');
+    };
+
+    const actionsBox = document.getElementById('actions-box');
+    const tutorialBox = document.getElementById('tutorial-box');
+    const toastEl = document.getElementById('toast');
+    let toastTimeout;
+
+    function pushToast(message, type = 'info') {
+        clearTimeout(toastTimeout);
+        toastEl.textContent = message;
+        toastEl.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded-lg shadow-xl text-sm opacity-0 transform translate-y-5 hide';
+        toastEl.classList.add(type === 'error' ? 'bg-red-600' : 'bg-gray-900');
+        toastEl.classList.remove('hide', 'opacity-0', 'translate-y-5');
+        
+        toastTimeout = setTimeout(() => {
+            toastEl.classList.add('hide', 'opacity-0', 'translate-y-5');
+        }, 3000);
+    }
+    
+    const TUTORIALS = {
+        L1: '目标：为所有顶点着色，确保任意相邻顶点颜色不同。请先选择一个颜色，然后点击顶点。',
+        L2: '归纳步骤：一个已着色的图中加入一个新顶点（带虚线框）。由于其邻居少于4个，总有颜色可选。请为它着色。',
+        L3: '归纳法失效：新顶点的4个邻居颜色各异，无法直接着色。这是一个逻辑死锁。请点击“断言不可着色”以继续。',
+        L4: '反证法：如果存在一个最小的“坏图”，它一定不含“简单”部分。请点击所有度数 ≤ 4 的顶点，将它们归约。',
+        L5: 'Kempe链：中心顶点无法着色。请选择一对颜色，然后点击图中由这两种颜色构成的链条，翻转它们的颜色，为中心顶点腾出空间。',
+        L6: '放电法：目标是让所有顶点的电荷都变为非负。点击一个正电荷顶点，再点击一个相邻的负电荷顶点，即可转移部分电荷。',
+        L7: '构型验证：这是证明的最后一步。您需要证明这个“不可避免”的构型是“可约的”。请为内部顶点着色，使其与已着色的边界不冲突。',
+        Z_WIN: '恭喜！您已亲手走过百年证明之路，掌握了其最深刻的思想。'
+    };
+    function updateTutorial(layer) {
+        tutorialBox.textContent = TUTORIALS[layer] || '';
+    }
+
+    function drawPalette(uiState) {
+        actionsBox.innerHTML = '';
+        const container = document.createElement('div');
+        container.className = 'grid grid-cols-2 gap-2';
+        window.COLORS.forEach(col => {
+            const btn = document.createElement('button');
+            btn.className = 'w-full py-2 px-2 rounded-md border-2 text-left text-sm font-semibold transition-all';
+            btn.style.backgroundColor = col.fill;
+            btn.style.color = '#fff';
+            btn.textContent = `颜色 ${col.id}`;
+            btn.onclick = () => ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { currentColor: col.id } });
+            if (uiState.currentColor === col.id) {
+                btn.classList.add('border-blue-500', 'ring-2', 'ring-blue-500');
+            } else {
+                btn.classList.add('border-transparent');
+            }
+            container.appendChild(btn);
+        });
+        actionsBox.appendChild(container);
+    }
+    
+    function drawActions(layer, sigma, uiState) {
+        actionsBox.innerHTML = '';
+        switch(layer) {
+            case 'L7':
+            case 'L2':
+            case 'L1':
+                drawPalette(uiState);
+                break;
+            case 'L3':
+                const btn = document.createElement('button');
+                btn.className = "w-full bg-red-600 hover:bg-red-700 text-white rounded-md px-3 py-2 text-sm font-bold transition-colors";
+                btn.textContent = "断言不可着色";
+                btn.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.ACK_DEADLOCK });
+                actionsBox.appendChild(btn);
+                break;
+             case 'L4':
+                actionsBox.innerHTML = "<p class='text-xs text-center text-gray-500'>请点击所有度数 ≤ 4 的顶点完成归约。</p>";
+                break;
+            case 'L5':
+                const grid = document.createElement('div');
+                grid.className = 'grid grid-cols-3 gap-2 mb-2';
+                const pairs = [];
+                for(let i = 0; i < window.COLORS.length; i++) {
+                    for (let j = i + 1; j < window.COLORS.length; j++) {
+                        pairs.push([window.COLORS[i], window.COLORS[j]]);
+                    }
+                }
+                pairs.forEach(([c1, c2]) => {
+                    const b = document.createElement('button');
+                    b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${sigma.Cpair && sigma.Cpair[0] === c1.id && sigma.Cpair[1] === c2.id ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
+                    b.innerHTML = `<div class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
+                    b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.SELECT_KEMPE_PAIR, payload: { pair: [c1.id, c2.id] } });
+                    grid.appendChild(b);
+                });
+                actionsBox.appendChild(grid);
+                break;
+             case 'L6':
+                actionsBox.innerHTML = "<p class='text-xs text-center text-gray-500'>点击一个正电荷顶点，再点击一个相邻的负电荷顶点以转移电荷。</p>";
+                break;
+            case 'Z_WIN':
+                const resetButton = document.createElement('button');
+                resetButton.className = "w-full bg-green-600 hover:bg-green-700 text-white rounded-md px-3 py-2 text-sm font-bold transition-colors";
+                resetButton.textContent = "重新开始";
+                resetButton.onclick = () => { window.clearState(); window.location.reload(); };
+                actionsBox.appendChild(resetButton);
+                break;
+        }
+    }
+    
+    function updateUndoRedoButtons() {
+        // FIX: Removed redundant `if (window.ENGINE)` check as ENGINE is guaranteed to be initialized here.
+        document.getElementById('undoBtn').disabled = ENGINE.history.length === 0;
+        document.getElementById('redoBtn').disabled = ENGINE.redoStack.length === 0;
+    }
+
+    const ENGINE = new window.GameEngine();
+
+    document.getElementById('instantToggle').onchange = e => {
+        ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { instant: e.target.checked } });
+    };
+    document.getElementById('patternToggle').onchange = e => {
+        ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { usePattern: e.target.checked } });
+    };
+    document.getElementById('undoBtn').onclick = () => ENGINE.undo();
+    document.getElementById('redoBtn').onclick = () => ENGINE.redo();
+    
+    window.addEventListener('keydown', e => {
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'z') { e.preventDefault(); ENGINE.undo(); }
+            if (e.key === 'y') { e.preventDefault(); ENGINE.redo(); }
+        }
+    });
+
+    const prefersContrast = window.matchMedia('(prefers-contrast: more)').matches;
+    document.getElementById('patternToggle').checked = prefersContrast;
+    ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { usePattern: prefersContrast } });
+
+    ENGINE.subscribe(render);
+
+    // Initial Render Call
+    render(ENGINE.getState());
+
+    })();
+    </script>
+</body>
+</html>
