@@ -59,8 +59,10 @@
     <!-- Control Panel -->
     <aside class="w-full md:w-64 bg-white dark:bg-gray-800 p-4 border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-lg flex flex-col">
         <h1 class="text-xl font-bold mb-2">四色定理证明</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">游戏式探索世界近代三大数学难题之一</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">游戏式感受世界近代三大数学难题之一</p>
         
+        <div id="level-indicator" class="text-center text-sm font-semibold mb-2 text-gray-500 dark:text-gray-400"></div>
+
         <div id="tutorial-box" class="text-xs bg-blue-50 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 p-3 rounded-lg mb-4 min-h-[60px]">
             <!-- Tutorial messages will be injected here -->
         </div>
@@ -107,7 +109,7 @@
 
     const CHARGE_UNIT = 15;
     const CHARGE_STEP = 5;
-    const SAVE_KEY = 'fourColorTheorem_save_v11_final';
+    const SAVE_KEY = 'fourColorTheorem_save_v12_final';
     const DEBUG = new URLSearchParams(window.location.search).get('debug') === 'true';
 
     function deepClone(obj, hash = new WeakMap()) {
@@ -223,39 +225,38 @@
     ];
     const COLOR_ZERO = '#bdc3c7';
 
-    const Graphs = {
-        L1: {
-            nodes: [{ id: 'v1', x: 250, y: 150 }, { id: 'v2', x: 450, y: 150 }, { id: 'v3', x: 250, y: 350 }, { id: 'v4', x: 450, y: 350 }],
-            edges: [['v1', 'v2'], ['v1', 'v3'], ['v2', 'v4'], ['v3', 'v4'], ['v1', 'v4']]
-        },
-        L2_GROWTH: {
-            nodes: [{ id: 'a', x: 200, y: 250 }, { id: 'b', x: 350, y: 150 }, { id: 'c', x: 350, y: 350 }, { id: 'd', x: 550, y: 250 }],
-            edges: [['a', 'b'], ['b', 'c'], ['c', 'a'], ['b', 'd'], ['c', 'd']],
-            vStar: 'd', preset: { a: 1, b: 2, c: 3, d: 0 }
-        },
-        L3_DEADLOCK: {
-            nodes: [{ id: 'p', x: 250, y: 150 }, { id: 'q', x: 450, y: 150 }, { id: 'r', x: 450, y: 350 }, { id: 's', x: 250, y: 350 }, { id: 'x', x: 350, y: 250 }],
-            edges: [['p', 'x'], ['q', 'x'], ['r', 'x'], ['s', 'x']],
-            vStar: 'x', preset: { p: 1, q: 2, r: 3, s: 4, x: 0 }
-        },
-        L4_COMPLEX: { 
-            nodes: [
-                {id:'a',x:400,y:300},{id:'b',x:330,y:210},{id:'c',x:470,y:210},{id:'d',x:470,y:390},{id:'e',x:330,y:390},
-                {id:'f',x:260,y:150},{id:'g',x:400,y:150},{id:'h',x:540,y:150},{id:'i',x:540,y:300},{id:'j',x:540,y:450},
-                {id:'k',x:400,y:450},{id:'l',x:260,y:450},{id:'m',x:260,y:300},{id:'n',x:400,y:80},{id:'o',x:610,y:230},
-                {id:'p',x:610,y:370},{id:'q',x:400,y:520},{id:'r',x:190,y:370},{id:'s',x:190,y:230}
-            ],
-            edges: [
-                ['a','b'],['a','c'],['a','d'],['a','e'],['b','c'],['c','d'],['d','e'],['e','b'],
-                ['b','f'],['b','g'],['c','g'],['c','h'],['c','i'],['d','i'],['d','j'],['d','k'],
-                ['e','k'],['e','l'],['e','m'],['b','m'],['f','g'],['g','h'],['h','i'],['i','j'],
-                ['j','k'],['k','l'],['l','m'],['m','f'],['f','s'],['g','n'],['h','o'],['j','p'],
-                ['k','q'],['l','r'],['m','s'],['n','f'],['n','h'],['o','h'],['o','j'],['p','j'],
-                ['p','l'],['q','l'],['q','e'],['r','l'],['r','m'],['s','m'],['s','f']
-            ]
-        }
+    // FIX: Consolidated all level data into a single, unified LevelLibraries object.
+    // This resolves the ReferenceError for `Graphs`.
+    const LevelLibraries = {
+        L1: [
+            { name: "路径图 (k=2)", nodes: [{id:'a',x:200,y:300},{id:'b',x:300,y:300},{id:'c',x:400,y:300},{id:'d',x:500,y:300}], edges: [['a','b'],['b','c'],['c','d']] },
+            { name: "五边形 (k=3)", nodes: [{id:'a',x:400,y:180},{id:'b',x:520,y:260},{id:'c',x:470,y:400},{id:'d',x:330,y:400},{id:'e',x:280,y:260}], edges: [['a','b'],['b','c'],['c','d'],['d','e'],['e','a']] },
+            { name: "轮图 (k=4)", nodes: [{id:'c',x:400,y:300},{id:'v1',x:400,y:150},{id:'v2',x:530,y:250},{id:'v3',x:530,y:350},{id:'v4',x:400,y:450},{id:'v5',x:270,y:350},{id:'v6',x:270,y:250}], edges: [['c','v1'],['c','v2'],['c','v3'],['c','v4'],['c','v5'],['c','v6'],['v1','v2'],['v2','v3'],['v3','v4'],['v4','v5'],['v5','v6'],['v6','v1']] }
+        ],
+        L2: [
+            { name: "归纳步骤", nodes: [{ id: 'a', x: 200, y: 250 }, { id: 'b', x: 350, y: 150 }, { id: 'c', x: 350, y: 350 }, { id: 'd', x: 550, y: 250 }], edges: [['a', 'b'], ['b', 'c'], ['c', 'a'], ['b', 'd'], ['c', 'd']], vStar: 'd', preset: { a: 1, b: 2, c: 3, d: 0 } }
+        ],
+        L3: [
+            { name: "归纳法失效", nodes: [{ id: 'p', x: 250, y: 150 }, { id: 'q', x: 450, y: 150 }, { id: 'r', x: 450, y: 350 }, { id: 's', x: 250, y: 350 }, { id: 'x', x: 350, y: 250 }], edges: [['p', 'x'], ['q', 'x'], ['r', 'x'], ['s', 'x']], vStar: 'x', preset: { p: 1, q: 2, r: 3, s: 4, x: 0 } }
+        ],
+        L4: [
+            { name: "可完全归约图", nodes: [{id:'a',x:400,y:150},{id:'b',x:250,y:250},{id:'c',x:550,y:250},{id:'d',x:400,y:350},{id:'e',x:250,y:450},{id:'f',x:550,y:450}], edges: [['a','b'],['a','c'],['b','c'],['b','d'],['c','d'],['b','e'],['d','e'],['d','f'],['c','f']] },
+            { name: "伯克霍夫菱形核心", nodes: [{id:'a',x:260,y:160},{id:'b',x:320,y:160},{id:'c',x:240,y:220},{id:'d',x:340,y:220},{id:'e',x:200,y:100},{id:'f',x:380,y:100},{id:'g',x:420,y:190},{id:'h',x:380,y:280},{id:'i',x:200,y:280},{id:'j',x:160,y:190},{id:'k',x:260,y:60 },{id:'l',x:320,y:60 },{id:'m',x:430,y:130},{id:'n',x:430,y:250},{id:'o',x:320,y:320},{id:'p',x:260,y:320},{id:'q',x:150,y:250},{id:'r',x:150,y:130},{id:'s',x:260,y:240},{id:'t',x:320,y:240}],edges:[['a','b'],['b','d'],['d','c'],['c','a'],['a','d'],['b','c'],['a','k'],['a','e'],['b','l'],['b','f'],['c','i'],['c','j'],['d','g'],['d','h'],['e','k'],['k','l'],['l','f'],['f','m'],['m','g'],['g','n'],['n','h'],['h','o'],['o','p'],['p','i'],['i','q'],['q','j'],['j','r'],['r','e'],['e','b'],['f','a'],['g','c'],['h','b'],['i','d'],['j','a']]}
+        ],
+        L7: [
+            { 
+                name: "伯克霍夫菱形",
+                configGraph: { nodes: [{id:'a',x:400,y:150},{id:'b',x:250,y:250},{id:'c',x:550,y:250},{id:'d',x:400,y:350},{id:'e',x:400,y:250}], edges: [['a','b'],['a','c'],['b','d'],['c','d'],['a','e'],['b','e'],['c','e'],['d','e']] },
+                boundary: ['a','b','c','d'],
+                coloringChallenges: [
+                    { a:1, b:2, c:2, d:3 },
+                    { a:1, b:2, c:3, d:1 },
+                    { a:1, b:2, c:3, d:4 }
+                ]
+            }
+        ]
     };
-    Graphs.L6_DISCHARGE = Graphs.L4_COMPLEX;
+    LevelLibraries.L6 = LevelLibraries.L4.slice(1);
 
     /*─────────────────────────────────────────────────────*
      |                     2.  Engine                      |
@@ -303,12 +304,13 @@
       }
 
       _bootstrap() {
-        const g = new Graph(Graphs.L1.nodes, Graphs.L1.edges);
+        const levelData = LevelLibraries.L1[0];
+        const g = new Graph(levelData.nodes, levelData.edges);
         const c = {};
         g.nodes.forEach(n => c[n.id] = 0);
         return {
           layer: 'L1',
-          sigma: { G: g, c: c },
+          sigma: { G: g, c: c, levelIndex: 0 },
           uiState: { currentColor: 1, usePattern: false, instant: false }
         };
       }
@@ -470,44 +472,63 @@
       };
 
       if (goals[layer] && goals[layer](sigma1)) {
-        if (layer === 'L6') {
-            return { layer: 'Z_WIN', sigma: {}, uiState };
-        }
+        const library = LevelLibraries[layer];
+        if (library && sigma.levelIndex < library.length - 1) {
+            const newLevelIndex = sigma.levelIndex + 1;
+            const levelData = library[newLevelIndex];
+            const g = new Graph(levelData.nodes, levelData.edges);
+            let newSigma;
+            if (layer === 'L1') {
+                const c = {};
+                g.nodes.forEach(n => c[n.id] = 0);
+                newSigma = { G: g, c: c, levelIndex: newLevelIndex };
+            } else if (layer === 'L4') {
+                newSigma = { G_initial: g, G_active: g.clone(), V_reduced: [], levelIndex: newLevelIndex };
+            }
+            return { layer, sigma: newSigma, uiState };
+        } else {
+            if (layer === 'L6') {
+                return { layer: 'Z_WIN', sigma: {}, uiState };
+            }
+            const nextLayerId = nextLayer(layer);
+            let newSigma;
+            let newUiState = {...uiState, Cpair: null};
 
-        const nextLayerId = nextLayer(layer);
-        let newSigma;
-        let newUiState = {...uiState, Cpair: null};
-
-        switch (nextLayerId) {
-          case 'L2':
-            const g2 = new Graph(Graphs.L2_GROWTH.nodes, Graphs.L2_GROWTH.edges);
-            newSigma = { G: g2, c: { ...Graphs.L2_GROWTH.preset }, vStar: Graphs.L2_GROWTH.vStar };
-            break;
-          case 'L3':
-            const g3 = new Graph(Graphs.L3_DEADLOCK.nodes, Graphs.L3_DEADLOCK.edges);
-            newSigma = { G: g3, c: { ...Graphs.L3_DEADLOCK.preset }, vStar: Graphs.L3_DEADLOCK.vStar };
-            break;
-          case 'L4':
-            const g4 = new Graph(Graphs.L4_COMPLEX.nodes, Graphs.L4_COMPLEX.edges);
-            newSigma = { G_initial: g4, G_active: g4.clone(), V_reduced: [] };
-            break;
-          case 'L5':
-            const evidence = engine.cache.L3_FAIL_EVIDENCE;
-            newSigma = { G: evidence.G.clone(), c: { ...evidence.c }, v0: evidence.vStar };
-            break;
-          case 'L6':
-            const g6 = new Graph(Graphs.L6_DISCHARGE.nodes, Graphs.L6_DISCHARGE.edges);
-            const q = {};
-            g6.nodes.forEach(n => q[n.id] = (6 - g6.degree(n.id)) * CHARGE_UNIT);
-            newSigma = { G: g6, q: q };
-            break;
-          case 'Z_WIN':
-            newSigma = {};
-            break;
-          default:
-            throw new Error(`Invalid next layer ID: ${nextLayerId}`);
+            switch (nextLayerId) {
+              case 'L2':
+                const l2Data = LevelLibraries.L2[0];
+                const g2 = new Graph(l2Data.nodes, l2Data.edges);
+                newSigma = { G: g2, c: { ...l2Data.preset }, vStar: l2Data.vStar, levelIndex: 0 };
+                break;
+              case 'L3':
+                const l3Data = LevelLibraries.L3[0];
+                const g3 = new Graph(l3Data.nodes, l3Data.edges);
+                newSigma = { G: g3, c: { ...l3Data.preset }, vStar: l3Data.vStar, levelIndex: 0 };
+                break;
+              case 'L4':
+                const l4Data = LevelLibraries.L4[0];
+                const g4 = new Graph(l4Data.nodes, l4Data.edges);
+                newSigma = { G_initial: g4, G_active: g4.clone(), V_reduced: [], levelIndex: 0 };
+                break;
+              case 'L5':
+                const evidence = engine.cache.L3_FAIL_EVIDENCE;
+                newSigma = { G: evidence.G.clone(), c: { ...evidence.c }, v0: evidence.vStar };
+                break;
+              case 'L6':
+                const l6Data = LevelLibraries.L6[0];
+                const g6 = new Graph(l6Data.nodes, l6Data.edges);
+                const q = {};
+                g6.nodes.forEach(n => q[n.id] = (6 - g6.degree(n.id)) * CHARGE_UNIT);
+                newSigma = { G: g6, q: q, levelIndex: 0 };
+                break;
+              case 'Z_WIN':
+                newSigma = {};
+                break;
+              default:
+                throw new Error(`Invalid next layer ID: ${nextLayerId}`);
+            }
+            return { layer: nextLayerId, sigma: newSigma, uiState: newUiState };
         }
-        return { layer: nextLayerId, sigma: newSigma, uiState: newUiState };
       }
 
       return { layer, sigma: sigma1, uiState };
@@ -523,6 +544,7 @@
     exports.CHARGE_UNIT = CHARGE_UNIT;
     exports.canDischarge = canDischarge;
     exports.CHARGE_STEP = CHARGE_STEP;
+    exports.LevelLibraries = LevelLibraries;
     
     })(window);
     </script>
@@ -590,7 +612,7 @@
                 }
             }
             
-            updateTutorial(layer);
+            updateTutorial(layer, sigma);
             updateUndoRedoButtons();
             if (action && action.type === '__ERROR__') {
                 pushToast(action.payload, 'error');
@@ -846,6 +868,7 @@
     const actionsBox = document.getElementById('actions-box');
     const tutorialBox = document.getElementById('tutorial-box');
     const toastEl = document.getElementById('toast');
+    const levelIndicator = document.getElementById('level-indicator');
     let toastTimeout;
 
     function pushToast(message, type = 'info') {
@@ -870,8 +893,14 @@
         L7: '构型验证：这是证明的最后一步。您需要证明这个“不可避免”的构型是“可约的”。请为内部顶点着色，使其与已着色的边界不冲突。',
         Z_WIN: '恭喜！您已亲手走过百年证明之路，掌握了其最深刻的思想。'
     };
-    function updateTutorial(layer) {
+    function updateTutorial(layer, sigma) {
         tutorialBox.textContent = TUTORIALS[layer] || '';
+        if (sigma && typeof sigma.levelIndex === 'number') {
+            const library = window.LevelLibraries[layer];
+            levelIndicator.textContent = `关卡 ${layer}-${sigma.levelIndex + 1}: ${library[sigma.levelIndex].name}`;
+        } else {
+            levelIndicator.textContent = '';
+        }
     }
 
     function drawPalette(uiState) {
@@ -928,7 +957,7 @@
                     b.setAttribute('aria-label', `选择颜色对 ${c1.id} 与 ${c2.id}`);
                     b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${isSelected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
                     b.innerHTML = `<div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div aria-hidden="true" class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
-                    b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { Cpair: [c1.id, c2.id] } });
+                    b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.SELECT_KEMPE_PAIR, payload: { pair: [c1.id, c2.id] } });
                     grid.appendChild(b);
                 });
                 actionsBox.appendChild(grid);
