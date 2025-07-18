@@ -27,7 +27,7 @@
             transform: scale(1.1);
             transition: transform 0.15s ease-out;
         }
-        .kempe-chain-highlight {
+        #graphCanvas .kempe-chain-highlight {
             stroke: #f59e0b !important;
             stroke-width: 5px !important;
             stroke-dasharray: 8 4;
@@ -35,6 +35,17 @@
         }
         @keyframes dash {
             to { stroke-dashoffset: -24; }
+        }
+        #graphCanvas {
+            touch-action: none;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .kempe-chain-highlight {
+                animation: none;
+            }
+            * {
+                transition-duration: 0s !important;
+            }
         }
     </style>
 </head>
@@ -48,7 +59,7 @@
     <!-- Control Panel -->
     <aside class="w-full md:w-64 bg-white dark:bg-gray-800 p-4 border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-lg flex flex-col">
         <h1 class="text-xl font-bold mb-2">四色定理证明</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">探索世界近代三大数学难题之一之旅</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">游戏式探索世界近代三大数学难题之一</p>
         
         <div id="tutorial-box" class="text-xs bg-blue-50 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 p-3 rounded-lg mb-4 min-h-[60px]">
             <!-- Tutorial messages will be injected here -->
@@ -96,7 +107,7 @@
 
     const CHARGE_UNIT = 15;
     const CHARGE_STEP = 5;
-    const SAVE_KEY = 'fourColorTheorem_save_v4';
+    const SAVE_KEY = 'fourColorTheorem_save_v8_final';
     const DEBUG = new URLSearchParams(window.location.search).get('debug') === 'true';
 
     function deepClone(obj, hash = new WeakMap()) {
@@ -104,7 +115,9 @@
         if (hash.has(obj)) return hash.get(obj);
 
         if (typeof obj.clone === 'function') {
-            return obj.clone();
+            const result = obj.clone();
+            hash.set(obj, result);
+            return result;
         }
 
         if (obj instanceof Set) {
@@ -170,19 +183,29 @@
     };
 
     const canDischarge = (G, q, u, v, dq = CHARGE_STEP) => {
-        return G.neighbors(u).includes(v) && q[u] >= dq;
+        return G.neighbors(u).includes(v) && q[u] >= dq && q[v] < 0;
     };
 
     const saveState = s => {
         try {
-            localStorage.setItem(SAVE_KEY, JSON.stringify(s));
+            // FIX: Use a custom replacer to handle Graph objects correctly, preventing data bloat.
+            const replacer = (key, value) => {
+                if (value instanceof Graph) {
+                    return { _type: 'Graph', nodes: value.nodes, edges: value.edges };
+                }
+                return value;
+            };
+            localStorage.setItem(SAVE_KEY, JSON.stringify(s, replacer));
         } catch (e) {
             console.error("Failed to save state:", e);
         }
     };
     const loadState = () => {
         try {
-            return JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+            const raw = localStorage.getItem(SAVE_KEY);
+            if (!raw) return null;
+            // The rehydration of Graph instances is now handled in the GameEngine constructor.
+            return JSON.parse(raw);
         } catch {
             return null;
         }
@@ -216,7 +239,7 @@
             edges: [['p', 'x'], ['q', 'x'], ['r', 'x'], ['s', 'x']],
             vStar: 'x', preset: { p: 1, q: 2, r: 3, s: 4, x: 0 }
         },
-        L4_COMPLEX: {
+        L4_COMPLEX: { 
             nodes: [
                 {id:'a',x:400,y:300},{id:'b',x:330,y:210},{id:'c',x:470,y:210},{id:'d',x:470,y:390},{id:'e',x:330,y:390},
                 {id:'f',x:260,y:150},{id:'g',x:400,y:150},{id:'h',x:540,y:150},{id:'i',x:540,y:300},{id:'j',x:540,y:450},
@@ -317,10 +340,11 @@
       dispatch(action) {
         try {
           const prevState = this.state;
+          const historyState = deepClone(prevState);
           const nextState = _transition(prevState, action, this);
 
           if (nextState !== prevState) {
-            this.history.push(deepClone(prevState));
+            this.history.push(historyState);
             this.redoStack.length = 0;
             this.state = nextState;
           }
@@ -328,47 +352,63 @@
           this._notify(action);
           saveState(this.state);
         } catch (error) {
-          console.error(`Action Dispatch Failed: ${error.message}`, { action, state: this.state });
+          console.error(`Action Dispatch Failed: ${error.message}`, { action, state: this.state, error });
+          if (error.fatal) {
+              this.state = this.history.pop() || this._bootstrap(); // Rollback
+          }
           this.subs.forEach(fn => fn(this.state, { type: '__ERROR__', payload: error.message }));
         }
       }
     }
 
     function _microStep(l, σ, a, engine) {
-      const newSigma = deepClone(σ);
+      const newSigma = { ...σ };
       switch (a.type) {
         case ACTIONS.COLOR_VERTEX:
-          // In L7, this action has a different target object
           if (l === 'L7') {
-              newSigma.cI[a.payload.v] = a.payload.k;
+              newSigma.cI = {...σ.cI, [a.payload.v]: a.payload.k };
           } else {
-              newSigma.c[a.payload.v] = a.payload.k;
+              newSigma.c = {...σ.c, [a.payload.v]: a.payload.k };
           }
           break;
         case ACTIONS.ACK_DEADLOCK:
-          engine.cache.L3_FAIL_EVIDENCE = deepClone(σ);
+          engine.cache.L3_FAIL_EVIDENCE = { G: σ.G.clone(), c: {...σ.c}, vStar: σ.vStar };
           break;
         case ACTIONS.REMOVE_VERTEX:
           const vId = a.payload.v;
-          newSigma.V_reduced.push(vId);
-          const activeNodes = newSigma.G_active.nodes.filter(n => n.id !== vId);
-          const activeEdges = newSigma.G_active.edges.filter(e => e[0] !== vId && e[1] !== vId);
+          newSigma.V_reduced = [...σ.V_reduced, vId];
+          const activeNodes = σ.G_active.nodes.filter(n => n.id !== vId);
+          const activeEdges = σ.G_active.edges.filter(e => e[0] !== vId && e[1] !== vId);
           newSigma.G_active = new Graph(activeNodes, activeEdges);
           break;
         case ACTIONS.SELECT_KEMPE_PAIR:
           newSigma.Cpair = a.payload.pair;
           break;
         case ACTIONS.FLIP_KEMPE:
+          newSigma.c = {...σ.c};
           const [k1, k2] = σ.Cpair;
           for (const v of a.payload.chain) {
             newSigma.c[v] = newSigma.c[v] === k1 ? k2 : k1;
           }
-          newSigma.Cpair = null;
+          if (l === 'L5') {
+              const neighborColors = new Set(newSigma.G.neighbors(newSigma.v0).map(id => newSigma.c[id]));
+              const freeColor = COLORS.find(c => !neighborColors.has(c.id));
+              if (!freeColor) {
+                  throw Object.assign(new Error('Kempe flip failed to free a color for v0.'), {fatal: true});
+              }
+              newSigma.c[newSigma.v0] = freeColor.id;
+          }
+          delete newSigma.Cpair;
           break;
         case ACTIONS.DISCHARGE:
-          if (canDischarge(σ.G, σ.q, a.payload.u, a.payload.v, a.payload.Δq)) {
-            newSigma.q[a.payload.u] -= a.payload.Δq;
-            newSigma.q[a.payload.v] += a.payload.Δq;
+          if (!canDischarge(σ.G, σ.q, a.payload.u, a.payload.v)) {
+              throw new Error('Illegal discharge attempt in microstep.');
+          }
+          newSigma.q = {...σ.q};
+          newSigma.q[a.payload.u] -= a.payload.Δq;
+          newSigma.q[a.payload.v] += a.payload.Δq;
+          if (newSigma.q[a.payload.u] < 0) {
+              throw new Error('Discharge resulted in negative source charge.');
           }
           break;
         case ACTIONS.ASK_HINT:
@@ -394,7 +434,7 @@
         L3: () => action.type === ACTIONS.ACK_DEADLOCK,
         L4: () => action.type === ACTIONS.REMOVE_VERTEX && sigma.G_active.degree(action.payload.v) <= 4,
         L5: () => action.type === ACTIONS.SELECT_KEMPE_PAIR || (action.type === ACTIONS.FLIP_KEMPE && sigma.Cpair),
-        L6: () => action.type === ACTIONS.DISCHARGE || action.type === ACTIONS.ASK_HINT,
+        L6: () => (action.type === ACTIONS.DISCHARGE && canDischarge(sigma.G, sigma.q, action.payload.u, action.payload.v)) || action.type === ACTIONS.ASK_HINT,
         L7: () => action.type === ACTIONS.COLOR_VERTEX && sigma.cI.hasOwnProperty(action.payload.v),
         _RECEIVE_HINT: () => true
       };
@@ -421,12 +461,12 @@
         L1: (σ) => isProperlyColored(σ.G, σ.c) && Object.values(σ.c).every(k => k !== 0),
         L2: (σ) => isProperlyColored(σ.G, σ.c) && σ.c[σ.vStar] !== 0,
         L3: () => action.type === ACTIONS.ACK_DEADLOCK,
-        L4: (σ) => σ.G_active.nodes.every(n => σ.G_active.degree(n.id) >= 5),
-        L5: (σ) => {
-          const neighborColors = new Set(σ.G.neighbors(σ.v0).map(id => σ.c[id]));
-          return COLORS.some(c => !neighborColors.has(c.id));
+        L4: (σ) => σ.G_active.nodes.length > 0 && σ.G_active.nodes.every(n => σ.G_active.degree(n.id) >= 5),
+        L5: (σ) => isProperlyColored(σ.G, σ.c) && σ.c[σ.v0] !== 0,
+        L6: (σ) => {
+            const positiveNodes = Object.keys(σ.q).filter(u => σ.q[u] > 0);
+            return !positiveNodes.some(u => σ.G.neighbors(u).some(v => σ.q[v] < 0));
         },
-        L6: (σ) => Object.values(σ.q).every(v => v >= 0),
         L7: (σ) => {
           if (Object.values(σ.cI).some(k => k === 0)) return false;
           const fullColoring = { ...σ.cB, ...σ.cI };
@@ -435,17 +475,45 @@
       };
 
       if (goals[layer] && goals[layer](sigma1)) {
+        if (layer === 'L6') {
+            const remainingNegativeNodes = Object.keys(sigma1.q).filter(v => sigma1.q[v] < 0);
+            if (remainingNegativeNodes.length === 0) {
+                return { layer: 'Z_WIN', sigma: {}, uiState };
+            } 
+            const G_snapshot = sigma1.G;
+            const N = remainingNegativeNodes;
+            const N_star_set = new Set(N);
+            N.forEach(v => G_snapshot.neighbors(v).forEach(nb => N_star_set.add(nb)));
+            
+            const C_nodes = G_snapshot.nodes.filter(n => N_star_set.has(n.id));
+            const C_edges = G_snapshot.edges.filter(e => N_star_set.has(e[0]) && N_star_set.has(e[1]));
+            const C = new Graph(C_nodes, C_edges);
+            const B = [...N_star_set].filter(v => !N.includes(v));
+
+            const totalChargeInC = C_nodes.reduce((sum, node) => sum + sigma1.q[node.id], 0);
+            if (totalChargeInC >= 0) throw new Error(`L7 Init Error: Generated C is not negative (charge: ${totalChargeInC}).`);
+            if (B.length > 12) throw new Error(`L7 Init Error: Boundary |B|=${B.length} is too large.`);
+            if (B.length === 0 && C.nodes.length > 0) throw new Error(`L7 Init Error: C has no boundary.`);
+
+            const cB = {};
+            B.forEach((v, i) => cB[v] = COLORS[i % COLORS.length].id);
+            const cI = {};
+            N.forEach(v => cI[v] = 0);
+            const newSigma = { C, B, cB, cI };
+            return { layer: 'L7', sigma: newSigma, uiState: {...uiState, Cpair: null} };
+        }
+
         const nextLayerId = nextLayer(layer);
         let newSigma;
 
         switch (nextLayerId) {
           case 'L2':
             const g2 = new Graph(Graphs.L2_GROWTH.nodes, Graphs.L2_GROWTH.edges);
-            newSigma = { G: g2, c: deepClone(Graphs.L2_GROWTH.preset), vStar: Graphs.L2_GROWTH.vStar };
+            newSigma = { G: g2, c: { ...Graphs.L2_GROWTH.preset }, vStar: Graphs.L2_GROWTH.vStar };
             break;
           case 'L3':
             const g3 = new Graph(Graphs.L3_DEADLOCK.nodes, Graphs.L3_DEADLOCK.edges);
-            newSigma = { G: g3, c: deepClone(Graphs.L3_DEADLOCK.preset), vStar: Graphs.L3_DEADLOCK.vStar };
+            newSigma = { G: g3, c: { ...Graphs.L3_DEADLOCK.preset }, vStar: Graphs.L3_DEADLOCK.vStar };
             break;
           case 'L4':
             const g4 = new Graph(Graphs.L4_COMPLEX.nodes, Graphs.L4_COMPLEX.edges);
@@ -453,48 +521,13 @@
             break;
           case 'L5':
             const evidence = engine.cache.L3_FAIL_EVIDENCE;
-            newSigma = { G: evidence.G.clone(), c: deepClone(evidence.c), v0: evidence.vStar, Cpair: null };
+            newSigma = { G: evidence.G.clone(), c: { ...evidence.c }, v0: evidence.vStar, Cpair: null };
             break;
           case 'L6':
             const g6 = new Graph(Graphs.L6_DISCHARGE.nodes, Graphs.L6_DISCHARGE.edges);
             const q = {};
             g6.nodes.forEach(n => q[n.id] = (6 - g6.degree(n.id)) * CHARGE_UNIT);
-            newSigma = { G: g6, q: q, R: { Δq: CHARGE_STEP } };
-            break;
-          case 'L7':
-            const mostNegativeNode = Object.entries(sigma1.q).filter(([, charge]) => charge < 0).sort((a, b) => a[1] - b[1])[0]?.[0];
-            if (!mostNegativeNode) throw new Error("L6 goal met but no negative node found.");
-            
-            const q_snapshot = sigma1.q;
-            const G_snapshot = sigma1.G;
-            let C_nodes_ids = new Set();
-            let charge_sum = 0;
-            const queue = [mostNegativeNode];
-            const visited = new Set([mostNegativeNode]);
-            
-            while (queue.length > 0) {
-              const u = queue.shift();
-              C_nodes_ids.add(u);
-              charge_sum += q_snapshot[u];
-              if (charge_sum < 0) break;
-              for (const v of G_snapshot.neighbors(u)) {
-                if (!visited.has(v)) {
-                  visited.add(v);
-                  queue.push(v);
-                }
-              }
-            }
-
-            const C_nodes = G_snapshot.nodes.filter(n => C_nodes_ids.has(n.id));
-            const C_edges = G_snapshot.edges.filter(e => C_nodes_ids.has(e[0]) && C_nodes_ids.has(e[1]));
-            const C = new Graph(C_nodes, C_edges);
-            
-            const B = C_nodes.filter(n => G_snapshot.degree(n.id) !== C.degree(n.id)).map(n => n.id);
-            const cB = {};
-            B.forEach((v, i) => cB[v] = COLORS[i % COLORS.length].id);
-            const cI = {};
-            C_nodes.forEach(n => { if (!cB[n.id]) cI[n.id] = 0; });
-            newSigma = { C, B, cB, cI, solution: null };
+            newSigma = { G: g6, q: q };
             break;
           case 'Z_WIN':
             newSigma = {};
@@ -502,7 +535,7 @@
           default:
             throw new Error(`Invalid next layer ID: ${nextLayerId}`);
         }
-        return { layer: nextLayerId, sigma: newSigma, uiState };
+        return { layer: nextLayerId, sigma: newSigma, uiState: {...uiState, Cpair: null} };
       }
 
       return { layer, sigma: sigma1, uiState };
@@ -513,6 +546,9 @@
     exports.clearState = clearState;
     exports.COLORS = COLORS;
     exports.COLOR_ZERO = COLOR_ZERO;
+    exports.getKempeChain = getKempeChain;
+    exports.DEBUG = DEBUG;
+    exports.CHARGE_UNIT = CHARGE_UNIT;
     
     })(window);
     </script>
@@ -540,7 +576,7 @@
         const defs = svg.append('defs');
         const addPattern = (id, pathD, strokeWidth = 1) => {
             const p = defs.append('pattern').attr('id', id).attr('patternUnits', 'userSpaceOnUse').attr('width', 8).attr('height', 8);
-            p.append('rect').attr('width', 8).attr('height', 8).attr('fill', 'rgba(255,255,255,0.9)');
+            p.append('rect').attr('width', 8).attr('height', 8).attr('fill', 'hsl(0 0% 100% / 0.7)');
             p.append('path').attr('d', pathD).attr('stroke', '#333').attr('stroke-width', strokeWidth).attr('stroke-linecap', 'square');
         };
         addPattern('pat-stripes', 'M-2,2 L2,-2 M0,8 L8,0 M6,10 L10,6');
@@ -562,28 +598,22 @@
             const { layer, sigma, uiState } = state;
             const renderFunc = Renders[layer] || Renders.Z_WIN;
             
-            // FIX: Handle initial render (action is undefined) separately to prevent transition bugs.
             if (!action) {
                 renderFunc(sigma, uiState);
                 svg.style('opacity', 1);
-                updateTutorial(layer);
-                updateUndoRedoButtons();
-                return;
-            }
-
-            const isLayerTransition = (ENGINE.history.length > 0 && ENGINE.history[ENGINE.history.length-1].layer !== layer);
-
-            if (isLayerTransition) {
-                const t = d3.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION);
-                svg.transition(t).style('opacity', 0).on('end', () => {
-                    if (ENGINE.getState().layer === layer) {
-                        renderFunc(sigma, uiState);
-                        // Create a NEW transition for the fade-in
-                        svg.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION).style('opacity', 1);
-                    }
-                });
             } else {
-                renderFunc(sigma, uiState);
+                const isLayerTransition = (ENGINE.history.length > 0 && ENGINE.history[ENGINE.history.length-1].layer !== layer);
+                if (isLayerTransition) {
+                    const t = d3.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION);
+                    svg.transition(t).style('opacity', 0).on('end', () => {
+                        if (ENGINE.getState().layer === layer) {
+                            renderFunc(sigma, uiState);
+                            svg.transition().duration(uiState.instant ? 0 : LAYER_TRANSITION_DURATION).style('opacity', 1);
+                        }
+                    });
+                } else {
+                    renderFunc(sigma, uiState);
+                }
             }
             
             updateTutorial(layer);
@@ -620,7 +650,10 @@
         nodeGroups
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('cursor', 'pointer')
-            .on('click', (e, d) => ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } }));
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
+                ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } });
+            });
         
         nodeGroups.select('circle')
             .transition().duration(uiState.instant ? 0 : ANIM_DURATION)
@@ -642,7 +675,8 @@
             .attr('class', 'node-group')
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('cursor', d => d.id === vStar && !isDeadlock ? 'pointer' : 'default')
-            .on('click', (e, d) => {
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
                 if (d.id === vStar && !isDeadlock) {
                     ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } });
                 }
@@ -681,7 +715,8 @@
             .attr('transform', d => `translate(${d.x},${d.y})`);
         
         nodeGroups
-            .on('click', (e, d) => {
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
                 if (G_active.getNode(d.id) && G_active.degree(d.id) <= 4) {
                     ENGINE.dispatch({ type: window.ACTIONS.REMOVE_VERTEX, payload: { v: d.id } });
                 }
@@ -701,7 +736,9 @@
     };
     
     Renders.L5 = (σ, uiState) => {
-        const { G, c, v0, Cpair } = σ;
+        svg.selectAll('.kempe-chain-highlight').classed('kempe-chain-highlight', false);
+        const { G, c, v0 } = σ;
+        const Cpair = uiState.Cpair; // Read from uiState
         svg.selectAll('*').remove();
 
         svg.append('g').selectAll('line').data(G.edges).join('line')
@@ -713,7 +750,9 @@
             .attr('class', 'node-group')
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('cursor', 'pointer')
-            .on('click', (e, d) => {
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
+                svg.selectAll('.kempe-chain-highlight').classed('kempe-chain-highlight', false);
                 if (!Cpair) return;
                 const [k1, k2] = Cpair;
                 if (c[d.id] === k1 || c[d.id] === k2) {
@@ -721,7 +760,7 @@
                     ENGINE.dispatch({ type: window.ACTIONS.FLIP_KEMPE, payload: { chain } });
                 }
             })
-            .on('mouseover', (e, d) => {
+            .on('pointerenter', (e, d) => {
                 if (!Cpair) return;
                 const [k1, k2] = Cpair;
                 if (c[d.id] === k1 || c[d.id] === k2) {
@@ -730,7 +769,7 @@
                     nodeGroups.selectAll('circle').classed('kempe-chain-highlight', n => chainSet.has(n.id));
                 }
             })
-            .on('mouseout', () => {
+            .on('pointerleave', () => {
                 nodeGroups.selectAll('circle').classed('kempe-chain-highlight', false);
             });
 
@@ -760,7 +799,8 @@
             .attr('class', 'node-group')
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('cursor', 'pointer')
-            .on('click', (e, d) => {
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
                 const circle = d3.select(e.currentTarget).select('circle');
                 if (!selectedNode) {
                     if (q[d.id] > 0) {
@@ -771,7 +811,6 @@
                     if (selectedNode !== d.id && canDischarge(G, q, selectedNode, d.id)) {
                         ENGINE.dispatch({ type: window.ACTIONS.DISCHARGE, payload: { u: selectedNode, v: d.id, Δq: CHARGE_STEP } });
                     }
-                    // Deselect regardless of success
                     svg.select(`circle[data-id="${selectedNode}"]`).attr('stroke', '#374151').attr('stroke-width', 2);
                     selectedNode = null;
                 }
@@ -803,7 +842,8 @@
             .attr('class', 'node-group')
             .attr('transform', d => `translate(${d.x},${d.y})`)
             .style('cursor', d => B.includes(d.id) ? 'not-allowed' : 'pointer')
-            .on('click', (e, d) => {
+            .on('pointerdown', (e, d) => {
+                e.preventDefault();
                 if (!B.includes(d.id)) {
                     ENGINE.dispatch({ type: window.ACTIONS.COLOR_VERTEX, payload: { v: d.id, k: uiState.currentColor } });
                 }
@@ -852,7 +892,7 @@
         L3: '归纳法失效：新顶点的4个邻居颜色各异，无法直接着色。这是一个逻辑死锁。请点击“断言不可着色”以继续。',
         L4: '反证法：如果存在一个最小的“坏图”，它一定不含“简单”部分。请点击所有度数 ≤ 4 的顶点，将它们归约。',
         L5: 'Kempe链：中心顶点无法着色。请选择一对颜色，然后点击图中由这两种颜色构成的链条，翻转它们的颜色，为中心顶点腾出空间。',
-        L6: '放电法：目标是让所有顶点的电荷都变为非负。点击一个正电荷顶点，再点击一个相邻的负电荷顶点，即可转移部分电荷。',
+        L6: '放电法：目标是让所有顶点的电荷都变为非负。点击一个正电荷顶点，再点击一个相邻的负电荷顶点以转移电荷。',
         L7: '构型验证：这是证明的最后一步。您需要证明这个“不可避免”的构型是“可约的”。请为内部顶点着色，使其与已着色的边界不冲突。',
         Z_WIN: '恭喜！您已亲手走过百年证明之路，掌握了其最深刻的思想。'
     };
@@ -867,6 +907,7 @@
         window.COLORS.forEach(col => {
             const btn = document.createElement('button');
             btn.className = 'w-full py-2 px-2 rounded-md border-2 text-left text-sm font-semibold transition-all';
+            btn.setAttribute('aria-label', `选择颜色 ${col.id}`);
             btn.style.backgroundColor = col.fill;
             btn.style.color = '#fff';
             btn.textContent = `颜色 ${col.id}`;
@@ -910,7 +951,10 @@
                 }
                 pairs.forEach(([c1, c2]) => {
                     const b = document.createElement('button');
-                    b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${sigma.Cpair && sigma.Cpair[0] === c1.id && sigma.Cpair[1] === c2.id ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
+                    // FIX: Read Cpair from uiState for correct highlighting
+                    const isSelected = uiState.Cpair && uiState.Cpair[0] === c1.id && uiState.Cpair[1] === c2.id;
+                    b.setAttribute('aria-label', `选择颜色对 ${c1.id} 和 ${c2.id}`);
+                    b.className = `w-full h-8 border-2 rounded-md flex items-center justify-center gap-1 transition-all ${isSelected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-gray-300'}`;
                     b.innerHTML = `<div class="w-4 h-4 rounded-full" style="background:${c1.fill}"></div><div class="w-4 h-4 rounded-full" style="background:${c2.fill}"></div>`;
                     b.onclick = () => ENGINE.dispatch({ type: window.ACTIONS.SELECT_KEMPE_PAIR, payload: { pair: [c1.id, c2.id] } });
                     grid.appendChild(b);
@@ -931,7 +975,6 @@
     }
     
     function updateUndoRedoButtons() {
-        // FIX: Removed redundant `if (window.ENGINE)` check as ENGINE is guaranteed to be initialized here.
         document.getElementById('undoBtn').disabled = ENGINE.history.length === 0;
         document.getElementById('redoBtn').disabled = ENGINE.redoStack.length === 0;
     }
@@ -958,10 +1001,20 @@
     document.getElementById('patternToggle').checked = prefersContrast;
     ENGINE.dispatch({ type: window.ACTIONS._SET_UI_STATE, payload: { usePattern: prefersContrast } });
 
-    ENGINE.subscribe(render);
+    ENGINE.subscribe((state, action) => {
+        render(state, action);
+        if (window.DEBUG) {
+            const { sigma } = state;
+            if (sigma.q) {
+                const total = Object.values(sigma.q).reduce((a,b)=>a+b,0);
+                if(Math.abs(total - (12 * window.CHARGE_UNIT)) > 1e-9) console.warn('Charge sum invariant violated!', total);
+            }
+        }
+    });
 
     // Initial Render Call
     render(ENGINE.getState());
+    updateUndoRedoButtons();
 
     })();
     </script>
